@@ -1,0 +1,31 @@
+# Data
+data/raw/
+data/processed/
+data/output/
+
+# Extra
+provided/
+RAG-subject.pdf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+
+# Environments
+.venv/
+venv/
+
+# Model weights
+*.bin
+*.safetensors
+*.gguf
+
+# OS
+.DS_Store
+
+CLAUDE.md

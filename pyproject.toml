@@ -1,0 +1,28 @@
+description = "A RAG system that retrieves relevant chunks from the vLLM codebase using BM25 and generates answers with Qwen3-0.6B"
+
+[project]
+name = "nstreet-"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "fire>=0.6",
+    "tqdm>=4.0",
+    "transformers>=4.40",
+    "bm25s>=0.2",
+    "torch>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "flake8>=7.0",
+    "mypy>=1.0",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
