@@ -1,7 +1,7 @@
 description = "A RAG system that retrieves relevant chunks from the vLLM codebase using BM25 and generates answers with Qwen3-0.6B"
 
 [project]
-name = "nstreet-"
+name = "nstreet"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
