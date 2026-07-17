@@ -2,7 +2,7 @@ from src.models import MinimalSource
 import bm25s
 
 
-def load_index(file_path: str):
+def load_index(file_path: str) -> bm25s.BM25:
     return bm25s.BM25.load(file_path)
 
 
