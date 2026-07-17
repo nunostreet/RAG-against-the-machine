@@ -15,13 +15,13 @@ class RAGSystem():
             data = RagDataset.model_validate(json.load(f))
             chunks = build_chunks("data/raw")
             index = retriever.load_index("data/processed/bm25_index")
+            search_result: list = []
             for question in data.rag_questions:
                 results = retriever.search(
                     question.question, index, chunks, k=k
                     )
-                
-""" 
-class MinimalSearchResults(BaseModel):
-    question_id: str
-    question_str: str
-    retrieved_sources: List[MinimalSource] """
+                search_result.append(MinimalSearchResults(
+                    question_id=question.question_id,
+                    question_str=question.question_id,
+                    retrieved_sources=results
+                ))
