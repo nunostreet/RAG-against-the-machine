@@ -2,8 +2,11 @@ import json
 import os
 import src.retriever as retriever
 from src.chunker import build_chunks
-from src.generator import load_model
-from src.models import RagDataset, StudentSearchResults, MinimalSearchResults
+from src.generator import load_model, generate
+from src.models import (
+    RagDataset, StudentSearchResults, MinimalSearchResults,
+    MinimalAnswer, StudentSearchResultsAndAnswer,
+)
 
 
 class RAGSystem():
@@ -52,7 +55,35 @@ class RAGSystem():
     def answer(
             self,
             dataset_path: str,
-            output_path: str
+            output_path: str,
+            k: int = 10,
     ) -> None:
+        """Retrieve chunks and generate an answer for every question."""
         chunks = build_chunks("data/raw")
         index = retriever.load_index("data/processed/bm25_index")
+        tokenizer, model = load_model()
+
+        with open(dataset_path) as f:
+            data = RagDataset.model_validate(json.load(f))
+
+        answers: list = []
+        for question in data.rag_questions:
+            results = retriever.search(
+                question.question, index, chunks, k=k
+            )
+            answers.append(MinimalAnswer(
+                question_id=question.question_id,
+                question_str=question.question,
+                retrieved_sources=results,
+                answer=generate(question.question, results, tokenizer, model),
+            ))
+
+        output = StudentSearchResultsAndAnswer(
+            search_results=answers,
+            k=k,
+        )
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        with open(output_path, "w") as f:
+            f.write(output.model_dump_json(indent=2))
