@@ -6,14 +6,24 @@ from src.models import RagDataset, StudentSearchResults, MinimalSearchResults
 
 
 class RAGSystem():
+    """CLI entry point for the RAG system, exposed via python-fire."""
+
     def search(
             self,
             dataset_path: str,
             output_path: str,
             k: int = 10
     ) -> None:
+        """Run BM25 retrieval for every question and write results to JSON.
+
+        Args:
+            dataset_path: Path to the input JSON dataset file.
+            output_path:  Path where the output JSON will be written.
+            k:            Number of chunks to retrieve per question.
+        """
         chunks = build_chunks("data/raw")
         index = retriever.load_index("data/processed/bm25_index")
+
         with open(dataset_path) as f:
             data = RagDataset.model_validate(json.load(f))
 
@@ -27,12 +37,12 @@ class RAGSystem():
                 question_str=question.question,
                 retrieved_sources=results
             ))
+
         output = StudentSearchResults(
             search_results=search_result,
             k=k
         )
 
-        # Checking if folder doesn't exist already
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         with open(output_path, "w") as f:
