@@ -2,6 +2,7 @@ import json
 import os
 import src.retriever as retriever
 from src.chunker import build_chunks
+from src.generator import load_model
 from src.models import RagDataset, StudentSearchResults, MinimalSearchResults
 
 
@@ -47,3 +48,11 @@ class RAGSystem():
 
         with open(output_path, "w") as f:
             f.write(output.model_dump_json(indent=2))
+
+    def answer(
+            self,
+            dataset_path: str,
+            output_path: str
+    ) -> None:
+        chunks = build_chunks("data/raw")
+        index = retriever.load_index("data/processed/bm25_index")
