@@ -8,8 +8,10 @@ OVERLAP = 200
 INDEXED_EXTENSIONS = {".py", ".md", ".txt"}
 
 
-def chunk_file(file_path: str) -> list[MinimalSource]:
-    """Split a single file into overlapping chunks of CHUNK_SIZE characters.
+def chunk_file(
+    file_path: str, chunk_size: int = CHUNK_SIZE
+) -> list[MinimalSource]:
+    """Split a single file into overlapping chunks of chunk_size characters.
 
     Each chunk is a MinimalSource pointing to a slice of the file via
     character offsets. Overlap ensures no information is cut off at boundaries.
@@ -23,7 +25,7 @@ def chunk_file(file_path: str) -> list[MinimalSource]:
     start = 0
 
     while start < len(text):
-        end = min(start + CHUNK_SIZE, len(text))
+        end = min(start + chunk_size, len(text))
         chunks.append(MinimalSource(
             file_path=relative_path,
             first_character_index=start,
@@ -31,14 +33,16 @@ def chunk_file(file_path: str) -> list[MinimalSource]:
         ))
         if end == len(text):
             break
-        # Advance by (CHUNK_SIZE - OVERLAP) so consecutive chunks share
+        # Advance by (chunk_size - OVERLAP) so consecutive chunks share
         # OVERLAP characters — this prevents information loss at chunk edges
-        start += CHUNK_SIZE - OVERLAP
+        start += chunk_size - OVERLAP
 
     return chunks
 
 
-def build_chunks(raw_dir: str) -> list[MinimalSource]:
+def build_chunks(
+    raw_dir: str, max_chunk_size: int = CHUNK_SIZE
+) -> list[MinimalSource]:
     """Walk raw_dir recursively and chunk every file with an indexed extension.
     """
     all_chunks: list[MinimalSource] = []
@@ -46,6 +50,8 @@ def build_chunks(raw_dir: str) -> list[MinimalSource]:
     for dirpath, _, filenames in os.walk(raw_dir):
         for fname in filenames:
             if os.path.splitext(fname)[1] in INDEXED_EXTENSIONS:
-                all_chunks.extend(chunk_file(os.path.join(dirpath, fname)))
+                all_chunks.extend(
+                    chunk_file(os.path.join(dirpath, fname), max_chunk_size)
+                )
 
     return all_chunks
