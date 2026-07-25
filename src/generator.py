@@ -9,8 +9,14 @@ def load_model(
     model_name: str = "Qwen/Qwen3-0.6B",
 ) -> tuple[PreTrainedTokenizerBase, PreTrainedModel]:
     """Load the tokenizer and model from HuggingFace cache."""
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+    except OSError:
+        raise OSError(
+            f"Model '{model_name}' not found in HuggingFace cache. "
+            "Ensure the model is downloaded before running."
+        )
     return tokenizer, model
 
 

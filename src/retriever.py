@@ -1,9 +1,15 @@
+import os
 from src.models import MinimalSource
 import bm25s
 
 
 def load_index(file_path: str) -> bm25s.BM25:
     """Load a previously saved BM25 index from disk."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(
+            f"BM25 index not found at '{file_path}'. "
+            "Run 'uv run python -m src index' first."
+        )
     return bm25s.BM25.load(file_path)
 
 
