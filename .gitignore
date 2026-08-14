@@ -6,6 +6,7 @@ data/output/
 # Extra
 provided/
 RAG-subject.pdf
+PROJECT_GUIDE.md
 
 # Python
 __pycache__/
