@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import uuid
-from typing import List, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MinimalSource(BaseModel):
     """A pointer to a slice of a file, identified by character offsets."""
 
     file_path: str
-    first_character_index: int
-    last_character_index: int
+    first_character_index: int = Field(ge=0)
+    last_character_index: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_offsets(self) -> "MinimalSource":
+        """Ensure the source slice is not empty or inverted."""
+        if self.last_character_index <= self.first_character_index:
+            raise ValueError(
+                "last_character_index must be greater than "
+                "first_character_index"
+            )
+        return self
 
 
 class UnansweredQuestion(BaseModel):
@@ -24,14 +33,14 @@ class UnansweredQuestion(BaseModel):
 class AnsweredQuestion(UnansweredQuestion):
     """An answered question with its supporting sources."""
 
-    sources: List[MinimalSource]
+    sources: list[MinimalSource]
     answer: str
 
 
 class RagDataset(BaseModel):
     """The input dataset — a mix of answered and unanswered questions."""
 
-    rag_questions: List[Union[AnsweredQuestion, UnansweredQuestion]]
+    rag_questions: list[AnsweredQuestion | UnansweredQuestion]
 
 
 class MinimalSearchResults(BaseModel):
@@ -39,7 +48,7 @@ class MinimalSearchResults(BaseModel):
 
     question_id: str
     question_str: str
-    retrieved_sources: List[MinimalSource]
+    retrieved_sources: list[MinimalSource]
 
 
 class MinimalAnswer(MinimalSearchResults):
@@ -51,11 +60,11 @@ class MinimalAnswer(MinimalSearchResults):
 class StudentSearchResults(BaseModel):
     """Full retrieval output for all questions, including the k used."""
 
-    search_results: List[MinimalSearchResults]
-    k: int
+    search_results: list[MinimalSearchResults]
+    k: int = Field(gt=0)
 
 
 class StudentSearchResultsAndAnswer(StudentSearchResults):
     """Full output including generated answers for all questions."""
 
-    search_results: List[MinimalAnswer]  # type: ignore[assignment]
+    search_results: list[MinimalAnswer]  # type: ignore[assignment]
