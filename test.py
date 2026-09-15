@@ -53,7 +53,7 @@ def test_evaluate_results_counts_found_sources() -> None:
         search_results=[
             MinimalSearchResults(
                 question_id="q1",
-                question_str="Where is the scheduler?",
+                question="Where is the scheduler?",
                 retrieved_sources=[
                     MinimalSource(
                         file_path="src/example.py",

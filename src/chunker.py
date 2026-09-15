@@ -11,7 +11,7 @@ import os
 
 from src.models import MinimalSource
 
-CHUNK_SIZE = 1000
+CHUNK_SIZE = 2000
 OVERLAP = 200
 INDEXED_EXTENSIONS = {".py", ".md", ".txt"}
 

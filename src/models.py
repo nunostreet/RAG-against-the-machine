@@ -47,7 +47,7 @@ class MinimalSearchResults(BaseModel):
     """BM25 retrieval results for a single question."""
 
     question_id: str
-    question_str: str
+    question: str
     retrieved_sources: list[MinimalSource]
 
 
@@ -68,3 +68,4 @@ class StudentSearchResultsAndAnswer(StudentSearchResults):
     """Full output including generated answers for all questions."""
 
     search_results: list[MinimalAnswer]  # type: ignore[assignment]
+    k: int

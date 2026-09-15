@@ -1,4 +1,4 @@
-*nstreet - Nuno Street - nstreet*
+*This project has been created as part of the 42 curriculum by nstreet-*
 
 # RAG System for vLLM
 

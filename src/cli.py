@@ -134,7 +134,7 @@ class RAGSystem():
 
     def index(
             self,
-            max_chunk_size: int = 1000,
+            max_chunk_size: int = 2000,
     ) -> None:
         """Chunk the repository and build the BM25 index, saving both to disk.
 
@@ -192,7 +192,7 @@ class RAGSystem():
             results = retriever.search(question.question, index, chunks, k=k)
             search_result.append(MinimalSearchResults(
                 question_id=question.question_id,
-                question_str=question.question,
+                question=question.question,
                 retrieved_sources=results,
             ))
 
@@ -238,7 +238,7 @@ class RAGSystem():
             for question in tqdm(data.rag_questions, desc="Searching"):
                 generated_results.append(MinimalSearchResults(
                     question_id=question.question_id,
-                    question_str=question.question,
+                    question=question.question,
                     retrieved_sources=retriever.search(
                         question.question, index, chunks, k=k
                     ),
@@ -261,10 +261,10 @@ class RAGSystem():
             retrieved_sources = question.retrieved_sources[:k]
             answers.append(MinimalAnswer(
                 question_id=question.question_id,
-                question_str=question.question_str,
+                question=question.question,
                 retrieved_sources=retrieved_sources,
                 answer=generate(
-                    question.question_str,
+                    question.question,
                     retrieved_sources,
                     tokenizer,
                     model,
@@ -322,7 +322,7 @@ class RAGSystem():
         response = generate(query, results, tokenizer, model)
         output = MinimalAnswer(
             question_id=str(uuid.uuid4()),
-            question_str=query,
+            question=query,
             retrieved_sources=results,
             answer=response,
         )
