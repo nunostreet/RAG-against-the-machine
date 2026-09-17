@@ -7,6 +7,7 @@ relative path and character offsets into that file.
 
 from __future__ import annotations
 
+import ast
 import os
 
 from src.models import MinimalSource
@@ -16,23 +17,75 @@ OVERLAP = 200
 INDEXED_EXTENSIONS = {".py", ".md", ".txt"}
 
 
-def chunk_file(
-    file_path: str, chunk_size: int = CHUNK_SIZE
+def chunk_python(
+    file_path: str,
+    text: str,
+    chunk_size: int,
 ) -> list[MinimalSource]:
-    """Split a single file into overlapping chunks of chunk_size characters.
 
-    Each chunk is a MinimalSource pointing to a slice of the file via
-    character offsets. Overlap ensures no information is cut off at boundaries.
-    The overlap is capped for very small chunk sizes so the loop always makes
-    progress.
-    """
-    with open(file_path, encoding="utf-8", errors="ignore") as f:
-        text = f.read()
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return chunk_text(file_path, text, chunk_size)
 
-    # Relative paths make generated outputs independent from local checkouts
+    lines = text.splitlines(keepends=True)
+    line_starts = [0]
+    for line in lines:
+        line_starts.append(line_starts[-1] + len(line))
+
+    interesting_types = (
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+    )
+
+    boundaries = [0]
+
+    for node in tree.body:
+        if isinstance(node, interesting_types):
+            start = line_starts[node.lineno - 1]
+            boundaries.append(start)
+
+    boundaries.append(len(text))
+    boundaries = sorted(set(boundaries))
+
     relative_path = os.path.relpath(file_path, start=".")
-    if chunk_size <= 0:
-        raise ValueError("chunk_size must be positive")
+
+    start = 0
+    chunks: list[MinimalSource] = []
+
+    while start < len(text):
+        maximum_end = min(start + chunk_size, len(text))
+
+        possible_ends = [
+            boundary
+            for boundary in boundaries
+            if start < boundary <= maximum_end
+        ]
+
+        end = max(possible_ends, default=maximum_end)
+
+        chunks.append(
+            MinimalSource(
+                file_path=relative_path,
+                first_character_index=start,
+                last_character_index=end,
+            )
+        )
+
+        start = end
+
+    return chunks
+
+
+def chunk_text(
+    file_path: str,
+    text: str,
+    chunk_size: int,
+) -> list[MinimalSource]:
+
+    relative_path = os.path.relpath(file_path, start=".")
+
     # To avoid negative / very small overlaps
     overlap = min(OVERLAP, max(0, chunk_size // 5))
     step = max(1, chunk_size - overlap)
@@ -53,6 +106,31 @@ def chunk_file(
         start += step
 
     return chunks
+
+
+def chunk_file(
+    file_path: str, chunk_size: int = CHUNK_SIZE
+) -> list[MinimalSource]:
+    """Split a single file into overlapping chunks of chunk_size characters.
+
+    Each chunk is a MinimalSource pointing to a slice of the file via
+    character offsets. Overlap ensures no information is cut off at boundaries.
+    The overlap is capped for very small chunk sizes so the loop always makes
+    progress.
+    """
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+
+    with open(file_path, encoding="utf-8", errors="ignore") as f:
+        text = f.read()
+
+    extension = os.path.splitext(file_path)[1].lower()
+
+    if extension == ".py":
+        return chunk_python(file_path, text, chunk_size)
+
+    return chunk_text(file_path, text, chunk_size)
 
 
 def build_chunks(
