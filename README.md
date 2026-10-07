@@ -48,15 +48,14 @@ Generate answers from search results:
 ```bash
 uv run python -m src answer_dataset \
   --student_search_results_path data/output/search_results/dataset_code_public.json \
-  --save_directory data/output/answers \
-  --k 10
+  --save_directory data/output/search_results_and_answer
 ```
 
 Evaluate retrieval against an answered dataset:
 
 ```bash
 uv run python -m src evaluate \
-  --student_results_path data/output/search_results/dataset_code_public.json \
+  --student_search_results_path data/output/search_results/dataset_code_public.json \
   --dataset_path data/datasets/AnsweredQuestions/dataset_code_public.json \
   --k 10 \
   --max_context_length 2000

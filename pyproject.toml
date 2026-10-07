@@ -29,6 +29,7 @@ packages = ["src"]
 
 [tool.mypy]
 ignore_missing_imports = true
+exclude = ["^data/", "^\\.venv/"]
 
 [tool.pytest.ini_options]
 testpaths = ["test.py"]

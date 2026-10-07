@@ -35,7 +35,7 @@ CHUNKS_PATH = "data/processed/chunks.json"
 RAW_DIR = "data/raw"
 MAX_ALLOWED_CHUNK_SIZE = 2000
 DEFAULT_SEARCH_OUTPUT_DIR = "data/output/search_results"
-DEFAULT_ANSWER_OUTPUT_DIR = "data/output/answers"
+DEFAULT_ANSWER_OUTPUT_DIR = "data/output/search_results_and_answer"
 
 
 def _die(message: str) -> NoReturn:
@@ -55,7 +55,13 @@ def _load_index_and_chunks() -> tuple[list[MinimalSource], bm25s.BM25]:
         _die(
             "chunks file not found. Run 'uv run python -m src index' first."
         )
-    chunks = load_chunks(CHUNKS_PATH)
+    try:
+        chunks = load_chunks(CHUNKS_PATH)
+    except (OSError, json.JSONDecodeError, ValidationError, TypeError) as exc:
+        _die(
+            f"chunks file is corrupted ({exc}). "
+            "Run 'uv run python -m src index' again."
+        )
     try:
         index = retriever.load_index(INDEX_PATH)
     except FileNotFoundError as exc:
@@ -70,6 +76,8 @@ def _load_dataset(dataset_path: str) -> RagDataset:
     try:
         with open(dataset_path, encoding="utf-8") as f:
             return RagDataset.model_validate(json.load(f))
+    except OSError as exc:
+        _die(f"cannot read dataset file: {exc}")
     except (json.JSONDecodeError, ValidationError) as exc:
         _die(f"invalid dataset file: {exc}")
 
@@ -81,13 +89,16 @@ def _load_student_search_results(path: str) -> StudentSearchResults:
     try:
         with open(path, encoding="utf-8") as f:
             return StudentSearchResults.model_validate(json.load(f))
+    except OSError as exc:
+        _die(f"cannot read student search results file: {exc}")
     except (json.JSONDecodeError, ValidationError) as exc:
         _die(f"invalid student search results file: {exc}")
 
 
 def _validate_chunk_size(max_chunk_size: int) -> None:
     """Validate that max_chunk_size is within allowed bounds."""
-    if max_chunk_size <= 0 or max_chunk_size > MAX_ALLOWED_CHUNK_SIZE:
+    if (not isinstance(max_chunk_size, int) or max_chunk_size <= 0
+            or max_chunk_size > MAX_ALLOWED_CHUNK_SIZE):
         _die(
             f"max_chunk_size must be between 1 and "
             f"{MAX_ALLOWED_CHUNK_SIZE}, got {max_chunk_size}."
@@ -96,33 +107,69 @@ def _validate_chunk_size(max_chunk_size: int) -> None:
 
 def _validate_k(k: int) -> None:
     """Validate that k is a positive integer."""
-    if k <= 0:
+    if not isinstance(k, int) or k <= 0:
         _die(f"k must be a positive integer, got {k}.")
 
 
-def _resolve_output_path(
-    output_path: str | None,
-    save_directory: str,
-    input_path: str,
-) -> str:
-    """Return an exact output path.
+def _validate_query(query: object) -> str:
+    """Return the query as text, or stop if it is empty.
 
-    The subject asks for `save_directory`, but earlier local code used
-    `output_path`. Supporting both keeps the CLI compatible while making the
-    documented workflow match the subject.
+    Fire converts arguments that look like literals (e.g. '123, 'True')
+    to Python values, so the query may not arrive as a string.
+
+    Args:
+        query: The raw query received from the CLI.
+
+    Returns:
+        The query as a non-empty string.
     """
-    if output_path:
-        return output_path
+    text = str(query).strip()
+    if not text:
+        _die("query must not be empty.")
+    return text
+
+
+def _prepare_output_path(output_path: str) -> None:
+    """Create the output directory early so a bad path fails fast.
+
+    Args:
+        output_path: Path of the JSON file that will be written.
+    """
+    directory = os.path.dirname(output_path)
+    try:
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+    except OSError as exc:
+        _die(f"cannot create output directory '{directory}': {exc}")
+    if os.path.isdir(output_path):
+        _die(f"output path is a directory: {output_path}")
+
+
+def _resolve_output_path(save_directory: str, input_path: str) -> str:
+    """Return the output file path inside `save_directory`.
+
+    The output keeps the input file name, so each dataset gets its own file.
+
+    Args:
+        save_directory: Directory where the output JSON will be written.
+        input_path: Path of the input JSON file.
+
+    Returns:
+        The path of the output JSON file.
+    """
     return os.path.join(save_directory, os.path.basename(input_path))
 
 
 def _write_json_model(output: BaseModel, output_path: str) -> None:
-    """Serialize a Pydantic model to pretty JSON, creating directories."""
-    directory = os.path.dirname(output_path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(output.model_dump_json(indent=2))
+    """Serialize a Pydantic model to pretty JSON.
+
+    The directory is created beforehand by `_prepare_output_path`.
+    """
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(output.model_dump_json(indent=2))
+    except OSError as exc:
+        _die(f"cannot write output file '{output_path}': {exc}")
 
 
 class RAGSystem():
@@ -166,35 +213,44 @@ class RAGSystem():
             self,
             dataset_path: str,
             save_directory: str = DEFAULT_SEARCH_OUTPUT_DIR,
-            output_path: str | None = None,
             k: int = 10,
     ) -> None:
         """Run BM25 retrieval for every question in a dataset.
 
         The output follows the `StudentSearchResults` schema expected by the
-        subject: one result per question and exactly `k` as metadata.
+        subject: one result per question and exactly `k` as metadata. Empty
+        questions are kept with no sources, so one bad entry does not stop
+        the whole dataset.
 
         Args:
             dataset_path: Path to the input JSON dataset file.
             save_directory: Directory where the output JSON will be written.
-            output_path: Optional exact output path, kept for compatibility.
             k: Number of chunks to retrieve per question.
         """
         _validate_k(k)
         chunks, index = _load_index_and_chunks()
         data = _load_dataset(dataset_path)
-        output_path = _resolve_output_path(
-            output_path, save_directory, dataset_path
-        )
+        output_path = _resolve_output_path(save_directory, dataset_path)
+        _prepare_output_path(output_path)
 
         search_result: list[MinimalSearchResults] = []
+        skipped = 0
         for question in tqdm(data.rag_questions, desc="Searching"):
-            results = retriever.search(question.question, index, chunks, k=k)
+            results: list[MinimalSource] = []
+            if question.question.strip():
+                results = retriever.search(
+                    question.question, index, chunks, k=k
+                )
+            else:
+                skipped += 1
             search_result.append(MinimalSearchResults(
                 question_id=question.question_id,
                 question=question.question,
                 retrieved_sources=results,
             ))
+        if skipped:
+            print(f"Warning: skipped {skipped} empty question(s).",
+                  file=sys.stderr)
 
         output = StudentSearchResults(search_results=search_result, k=k)
         _write_json_model(output, output_path)
@@ -202,76 +258,48 @@ class RAGSystem():
 
     def answer_dataset(
             self,
-            student_search_results_path: str | None = None,
+            student_search_results_path: str,
             save_directory: str = DEFAULT_ANSWER_OUTPUT_DIR,
-            output_path: str | None = None,
-            dataset_path: str | None = None,
-            k: int = 10,
     ) -> None:
         """Generate answers from a StudentSearchResults file.
 
-        Preferred mode is two-step: run `search_dataset` first, then pass its
-        JSON here through `student_search_results_path`. A legacy one-step mode
-        is also supported with `dataset_path`, which retrieves and answers in
-        one command.
+        Run `search_dataset` first and pass its JSON here. The `k` of the
+        output is the one used by that search. Empty questions get an empty
+        answer without calling the model.
 
         Args:
             student_search_results_path: JSON created by search_dataset.
             save_directory: Directory where the output JSON will be written.
-            output_path: Optional exact output path, kept for compatibility.
-            dataset_path: Optional dataset path for legacy retrieve+answer
-                mode.
-            k: Number of chunks to use per answer.
         """
-        _validate_k(k)
+        search_results = _load_student_search_results(
+            student_search_results_path
+        )
+        output_path = _resolve_output_path(
+            save_directory, student_search_results_path
+        )
+        _prepare_output_path(output_path)
         tokenizer, model = load_model()
 
-        if student_search_results_path is not None:
-            search_results = _load_student_search_results(
-                student_search_results_path
-            )
-            input_path = student_search_results_path
-        elif dataset_path is not None:
-            chunks, index = _load_index_and_chunks()
-            data = _load_dataset(dataset_path)
-            generated_results: list[MinimalSearchResults] = []
-            for question in tqdm(data.rag_questions, desc="Searching"):
-                generated_results.append(MinimalSearchResults(
-                    question_id=question.question_id,
-                    question=question.question,
-                    retrieved_sources=retriever.search(
-                        question.question, index, chunks, k=k
-                    ),
-                ))
-            search_results = StudentSearchResults(
-                search_results=generated_results, k=k
-            )
-            input_path = dataset_path
-        else:
-            _die(
-                "provide student_search_results_path, or dataset_path for "
-                "legacy retrieve+answer mode."
-            )
-
-        output_path = _resolve_output_path(
-            output_path, save_directory, input_path
-        )
         answers: list[MinimalAnswer] = []
         for question in tqdm(search_results.search_results, desc="Answering"):
-            retrieved_sources = question.retrieved_sources[:k]
+            answer = ""
+            if question.question.strip():
+                answer = generate(
+                    question.question,
+                    question.retrieved_sources,
+                    tokenizer,
+                    model,
+                )
             answers.append(MinimalAnswer(
                 question_id=question.question_id,
                 question=question.question,
-                retrieved_sources=retrieved_sources,
-                answer=generate(
-                    question.question,
-                    retrieved_sources,
-                    tokenizer,
-                    model,
-                ),
+                retrieved_sources=question.retrieved_sources,
+                answer=answer,
             ))
 
-        output = StudentSearchResultsAndAnswer(search_results=answers, k=k)
+        output = StudentSearchResultsAndAnswer(
+            search_results=answers, k=search_results.k
+        )
         _write_json_model(output, output_path)
         print(f"Results saved to {output_path}")
 
@@ -289,8 +317,7 @@ class RAGSystem():
             query: The search query string.
             k: Number of chunks to retrieve.
         """
-        if not query or not query.strip():
-            _die("query must not be empty.")
+        query = _validate_query(query)
         _validate_k(k)
         chunks, index = _load_index_and_chunks()
         results = retriever.search(query, index, chunks, k=k)
@@ -313,8 +340,7 @@ class RAGSystem():
             query: The question to answer.
             k: Number of chunks to retrieve.
         """
-        if not query or not query.strip():
-            _die("query must not be empty.")
+        query = _validate_query(query)
         _validate_k(k)
         chunks, index = _load_index_and_chunks()
         tokenizer, model = load_model()
@@ -330,7 +356,7 @@ class RAGSystem():
 
     def evaluate(
             self,
-            student_results_path: str,
+            student_search_results_path: str,
             dataset_path: str,
             k: int = 10,
             max_context_length: int = 2000,
@@ -345,7 +371,7 @@ class RAGSystem():
         _validate_k(k)
         try:
             metrics = evaluate_files(
-                student_results_path=student_results_path,
+                student_search_results_path=student_search_results_path,
                 dataset_path=dataset_path,
                 k=k,
                 max_context_length=max_context_length,

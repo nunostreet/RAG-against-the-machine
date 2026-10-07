@@ -122,10 +122,16 @@ def evaluate_results(
     Unanswered questions are ignored because they do not contain ground-truth
     sources.
     """
-    if k <= 0:
-        raise ValueError("k must be positive")
-    if threshold <= 0 or threshold > 1:
-        raise ValueError("threshold must be in the interval (0, 1]")
+    if not isinstance(k, int) or isinstance(k, bool) or k <= 0:
+        raise ValueError("k must be a positive integer")
+    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool) \
+            or not 0 < threshold <= 1:
+        raise ValueError("threshold must be a number in the interval (0, 1]")
+    if max_context_length is not None and (
+            not isinstance(max_context_length, int)
+            or isinstance(max_context_length, bool)
+            or max_context_length <= 0):
+        raise ValueError("max_context_length must be a positive integer")
 
     results_by_id = {
         result.question_id: result
@@ -172,7 +178,7 @@ def evaluate_results(
 
 
 def evaluate_files(
-    student_results_path: str,
+    student_search_results_path: str,
     dataset_path: str,
     k: int,
     max_context_length: int | None = 2000,
@@ -184,8 +190,10 @@ def evaluate_files(
     become a single user-facing `ValueError`.
     """
     try:
-        student_results = load_student_results(student_results_path)
+        student_results = load_student_results(student_search_results_path)
         dataset = load_dataset(dataset_path)
+    except OSError as exc:
+        raise ValueError(f"cannot read evaluation input: {exc}") from exc
     except (json.JSONDecodeError, ValidationError) as exc:
         raise ValueError(f"invalid evaluation input: {exc}") from exc
 
