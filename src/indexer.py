@@ -6,12 +6,30 @@ metadata needed to reconstruct `MinimalSource` outputs after retrieval.
 
 import json
 import os
+import re
 
 from src.models import MinimalSource
 import bm25s
 
 DEFAULT_INDEX_PATH = "data/processed/bm25_index"
 DEFAULT_CHUNKS_PATH = "data/processed/chunks.json"
+
+
+def _path_words(file_path: str) -> str:
+    """Turn a corpus path into searchable words.
+
+    The `data/raw/<repo>/` prefix is dropped because every chunk shares it.
+    The rest is split on `/`, `.`, `_` and `-`, so
+    `fused_moe/fused_batched_moe.py` gives `fused moe fused batched moe py`.
+
+    Args:
+        file_path: Path of the chunk's file, as stored in MinimalSource.
+
+    Returns:
+        The path words separated by spaces.
+    """
+    relative = re.sub(r"^data/raw/[^/]+/", "", file_path)
+    return " ".join(part for part in re.split(r"[/._\-]+", relative) if part)
 
 
 def get_chunk_text(chunk: MinimalSource) -> str:
@@ -26,9 +44,23 @@ def get_chunk_text(chunk: MinimalSource) -> str:
 
 
 def build_corpus(chunks: list[MinimalSource]) -> list[str]:
-    """Convert chunk metadata into the raw strings indexed by BM25."""
-    corpus = [get_chunk_text(chunk) for chunk in chunks]
-    return corpus
+    """Build the text BM25 indexes for each chunk.
+
+    Each entry is the chunk's content plus the words of its file path, so a
+    question that names a module (e.g. "fused batched MoE") also matches the
+    chunks of that file. The path words only affect ranking: the chunks
+    themselves, and their offsets, are unchanged.
+
+    Args:
+        chunks: Chunks in index order.
+
+    Returns:
+        One text per chunk, in the same order as `chunks`.
+    """
+    return [
+        f"{get_chunk_text(chunk)}\n{_path_words(chunk.file_path)}"
+        for chunk in chunks
+    ]
 
 
 def build_index(
