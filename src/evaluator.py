@@ -37,25 +37,21 @@ def load_dataset(path: str) -> RagDataset:
     return RagDataset.model_validate(_load_json(path))
 
 
-def _effective_source(
+def _validate_source_length(
     source: MinimalSource, max_context_length: int | None
-) -> MinimalSource:
-    """Apply the evaluator context cap to a retrieved source.
-
-    The moulinette accepts `max_context_length`; this helper approximates that
-    behavior by limiting how much of a retrieved chunk can count as context.
-    """
+) -> None:
+    """Reject retrieved sources exceeding the configured character limit."""
     if max_context_length is None:
-        return source
-    last_index = min(
-        source.last_character_index,
-        source.first_character_index + max_context_length,
-    )
-    return MinimalSource(
-        file_path=source.file_path,
-        first_character_index=source.first_character_index,
-        last_character_index=last_index,
-    )
+        return
+    if max_context_length <= 0:
+        raise ValueError("max_context_length must be positive or None")
+    length = source.last_character_index - source.first_character_index
+    if length > max_context_length:
+        raise ValueError(
+            f"retrieved source '{source.file_path}' "
+            f"({source.first_character_index}-{source.last_character_index}) "
+            f"has {length} characters; maximum is {max_context_length}"
+        )
 
 
 def source_iou(
@@ -68,7 +64,7 @@ def source_iou(
     IoU is intersection length divided by union length. Sources in different
     files never match, even if their numeric offsets overlap.
     """
-    retrieved = _effective_source(retrieved, max_context_length)
+    _validate_source_length(retrieved, max_context_length)
     if retrieved.file_path != expected.file_path:
         return 0.0
 
@@ -117,15 +113,22 @@ def evaluate_results(
 ) -> dict[str, float | int]:
     """Evaluate retrieval recall against answered questions in the dataset.
 
-    Recall is computed at source level: each expected source counts as found if
-    at least one of the top-k retrieved sources has IoU above `threshold`.
-    Unanswered questions are ignored because they do not contain ground-truth
-    sources.
+    Recall is averaged over answered questions, giving each equal weight.
+    A source is found when a top-k result has IoU >= `threshold` in the same
+    file. Missing results and answered questions with no expected sources
+    contribute zero recall. Unanswered questions are ignored. Overlong sources
+    invalidate the output, including sources outside the top-k being scored.
     """
     if k <= 0:
         raise ValueError("k must be positive")
-    if threshold <= 0 or threshold > 1:
+    if not 0 < threshold <= 1:
         raise ValueError("threshold must be in the interval (0, 1]")
+    if max_context_length is not None and max_context_length <= 0:
+        raise ValueError("max_context_length must be positive or None")
+
+    for search_result in student_results.search_results:
+        for source in search_result.retrieved_sources:
+            _validate_source_length(source, max_context_length)
 
     results_by_id = {
         result.question_id: result
@@ -140,25 +143,32 @@ def evaluate_results(
     total_sources = 0
     found_sources = 0
     answered_with_result = 0
+    recall_sum = 0.0
 
     for question in answered_questions:
         result = results_by_id.get(question.question_id)
-        if result is None:
-            continue
-
-        answered_with_result += 1
-        retrieved_sources = result.retrieved_sources[:k]
+        total_sources += len(question.sources)
+        retrieved_sources = (
+            [] if result is None else result.retrieved_sources[:k]
+        )
+        if result is not None:
+            answered_with_result += 1
+        question_found = 0
         for expected_source in question.sources:
-            total_sources += 1
             if source_is_found(
                 retrieved_sources,
                 expected_source,
                 threshold,
                 max_context_length,
             ):
-                found_sources += 1
+                question_found += 1
+        found_sources += question_found
+        if question.sources:
+            recall_sum += question_found / len(question.sources)
 
-    recall = found_sources / total_sources if total_sources else 0.0
+    recall = (
+        recall_sum / len(answered_questions) if answered_questions else 0.0
+    )
     return {
         "k": k,
         "threshold": threshold,
@@ -180,13 +190,15 @@ def evaluate_files(
 ) -> dict[str, float | int]:
     """Load files and evaluate retrieval recall.
 
-    This wrapper is used by the CLI so invalid JSON or invalid Pydantic schemas
-    become a single user-facing `ValueError`.
+    This wrapper turns file, encoding, JSON and schema errors into a single
+    user-facing `ValueError` handled by the CLI.
     """
     try:
         student_results = load_student_results(student_results_path)
         dataset = load_dataset(dataset_path)
-    except (json.JSONDecodeError, ValidationError) as exc:
+    except (
+        OSError, UnicodeError, json.JSONDecodeError, ValidationError
+    ) as exc:
         raise ValueError(f"invalid evaluation input: {exc}") from exc
 
     return evaluate_results(

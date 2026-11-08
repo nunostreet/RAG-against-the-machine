@@ -29,6 +29,14 @@ packages = ["src"]
 
 [tool.mypy]
 ignore_missing_imports = true
+exclude = '(^|/)(data|provided)/|(^|/)experiments_ast\.py$'
+
+[tool.pyright]
+include = ["src", "test.py"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
 testpaths = ["test.py"]

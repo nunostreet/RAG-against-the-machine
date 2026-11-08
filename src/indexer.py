@@ -7,6 +7,8 @@ metadata needed to reconstruct `MinimalSource` outputs after retrieval.
 import json
 import os
 
+from pydantic import TypeAdapter
+
 from src.models import MinimalSource
 import bm25s
 
@@ -66,4 +68,4 @@ def load_chunks(
 ) -> list[MinimalSource]:
     """Load chunk metadata and validate it through Pydantic."""
     with open(path, encoding="utf-8") as f:
-        return [MinimalSource(**item) for item in json.load(f)]
+        return TypeAdapter(list[MinimalSource]).validate_python(json.load(f))

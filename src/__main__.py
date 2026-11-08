@@ -7,12 +7,16 @@ methods as CLI commands.
 
 import fire
 
-from src.cli import RAGSystem
+from src.cli import RAGSystem, _die
 
 
 def main() -> None:
     """Start the Fire CLI for the RAG system."""
-    fire.Fire(RAGSystem)
+    try:
+        fire.Fire(RAGSystem)
+    except (OSError, ValueError, TypeError, KeyError, IndexError,
+            RuntimeError, EOFError) as exc:
+        _die(str(exc) or type(exc).__name__)
 
 
 if __name__ == "__main__":

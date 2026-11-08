@@ -7,6 +7,7 @@ data/output/
 provided/
 RAG-subject.pdf
 PROJECT_GUIDE.md
+docs/VALIDATION_GUIDE.pt.md
 
 # Python
 __pycache__/

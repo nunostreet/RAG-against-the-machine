@@ -10,6 +10,8 @@ from __future__ import annotations
 import ast
 import os
 
+from tqdm import tqdm
+
 from src.models import MinimalSource
 
 CHUNK_SIZE = 2000
@@ -22,7 +24,11 @@ def chunk_python(
     text: str,
     chunk_size: int,
 ) -> list[MinimalSource]:
+    """Split Python at top-level definitions, bounding each character span.
 
+    Definitions larger than chunk_size are split at the character limit.
+    Invalid Python falls back to overlapping text chunks.
+    """
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -83,7 +89,7 @@ def chunk_text(
     text: str,
     chunk_size: int,
 ) -> list[MinimalSource]:
-
+    """Split text into character windows with a bounded overlap."""
     relative_path = os.path.relpath(file_path, start=".")
 
     # To avoid negative / very small overlaps
@@ -143,13 +149,14 @@ def build_chunks(
     to chunks by list index.
     """
     all_chunks: list[MinimalSource] = []
-
+    files: list[str] = []
     for dirpath, dirnames, filenames in os.walk(raw_dir):
         dirnames.sort()
         for fname in sorted(filenames):
             if os.path.splitext(fname)[1].lower() in INDEXED_EXTENSIONS:
-                all_chunks.extend(
-                    chunk_file(os.path.join(dirpath, fname), max_chunk_size)
-                )
+                files.append(os.path.join(dirpath, fname))
+
+    for file_path in tqdm(files, desc="Chunking"):
+        all_chunks.extend(chunk_file(file_path, max_chunk_size))
 
     return all_chunks
