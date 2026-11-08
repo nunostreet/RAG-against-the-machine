@@ -83,8 +83,6 @@ def _load_dataset(dataset_path: str) -> RagDataset:
             dataset = RagDataset.model_validate(json.load(f))
     except (json.JSONDecodeError, ValidationError) as exc:
         _die(f"invalid dataset file: {exc}")
-    for question in dataset.rag_questions:
-        _validate_query(question.question)
     return dataset
 
 
@@ -97,15 +95,15 @@ def _load_student_search_results(path: str) -> StudentSearchResults:
             results = StudentSearchResults.model_validate(json.load(f))
     except (json.JSONDecodeError, ValidationError) as exc:
         _die(f"invalid student search results file: {exc}")
-    for question in results.search_results:
-        _validate_query(question.question)
     return results
 
 
-def _validate_query(query: str) -> None:
-    """Reject empty and non-text questions before loading artifacts."""
-    if not isinstance(query, str) or not query.strip():
+def _validate_query(query: object) -> str:
+    """Normalize Fire literal arguments to text and reject empty queries."""
+    text = str(query).strip()
+    if not text:
         _die("query must be a non-empty string.")
+    return text
 
 
 def _validate_chunk_size(max_chunk_size: int) -> None:
@@ -128,6 +126,8 @@ def _validate_answer_sources(results: StudentSearchResults, k: int) -> None:
     """Check selected source files and offsets before loading the model."""
     file_lengths: dict[str, int] = {}
     for question in results.search_results:
+        if not question.question.strip():
+            continue
         for source in question.retrieved_sources[:k]:
             if source.file_path not in file_lengths:
                 with open(source.file_path, encoding="utf-8",
@@ -156,11 +156,18 @@ def _resolve_output_path(
     return os.path.join(save_directory, os.path.basename(input_path))
 
 
-def _write_json_model(output: BaseModel, output_path: str) -> None:
-    """Serialize a Pydantic model to pretty JSON, creating directories."""
+def _prepare_output_path(output_path: str) -> None:
+    """Create output directories and reject directory targets early."""
     directory = os.path.dirname(output_path)
     if directory:
         os.makedirs(directory, exist_ok=True)
+    if os.path.isdir(output_path):
+        _die(f"output path is a directory: {output_path}")
+
+
+def _write_json_model(output: BaseModel, output_path: str) -> None:
+    """Serialize a Pydantic model to pretty JSON, creating directories."""
+    _prepare_output_path(output_path)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(output.model_dump_json(indent=2))
 
@@ -232,19 +239,30 @@ class RAGSystem():
         """
         _validate_k(k)
         data = _load_dataset(dataset_path)
-        chunks, index = _load_index_and_chunks(index_path, chunks_path)
         output_path = _resolve_output_path(
             output_path, save_directory, dataset_path
         )
+        _prepare_output_path(output_path)
+        chunks, index = _load_index_and_chunks(index_path, chunks_path)
 
         search_result: list[MinimalSearchResults] = []
+        skipped = 0
         for question in tqdm(data.rag_questions, desc="Searching"):
-            results = retriever.search(question.question, index, chunks, k=k)
+            results: list[MinimalSource] = []
+            if question.question.strip():
+                results = retriever.search(
+                    question.question, index, chunks, k=k
+                )
+            else:
+                skipped += 1
             search_result.append(MinimalSearchResults(
                 question_id=question.question_id,
                 question=question.question,
                 retrieved_sources=results,
             ))
+        if skipped:
+            print(f"Warning: skipped {skipped} empty question(s).",
+                  file=sys.stderr)
 
         output = StudentSearchResults(search_results=search_result, k=k)
         _write_json_model(output, output_path)
@@ -303,7 +321,7 @@ class RAGSystem():
                     question=question.question,
                     retrieved_sources=retriever.search(
                         question.question, index, chunks, k=k
-                    ),
+                    ) if question.question.strip() else [],
                 ))
             search_results = StudentSearchResults(
                 search_results=generated_results, k=k
@@ -318,24 +336,25 @@ class RAGSystem():
         output_path = _resolve_output_path(
             output_path, save_directory, input_path
         )
+        _prepare_output_path(output_path)
         _validate_answer_sources(search_results, k)
         answers: list[MinimalAnswer] = []
-        if search_results.search_results:
-            tokenizer, model = load_model()
-            for question in tqdm(search_results.search_results,
-                                 desc="Answering"):
-                retrieved_sources = question.retrieved_sources[:k]
-                answers.append(MinimalAnswer(
-                    question_id=question.question_id,
-                    question=question.question,
-                    retrieved_sources=retrieved_sources,
-                    answer=generate(
-                        question.question,
-                        retrieved_sources,
-                        tokenizer,
-                        model,
-                    ),
-                ))
+        loaded_model = None
+        for question in tqdm(search_results.search_results, desc="Answering"):
+            retrieved_sources = question.retrieved_sources[:k]
+            answer = ""
+            if question.question.strip():
+                if loaded_model is None:
+                    loaded_model = load_model()
+                tokenizer, model = loaded_model
+                answer = generate(question.question, retrieved_sources,
+                                  tokenizer, model)
+            answers.append(MinimalAnswer(
+                question_id=question.question_id,
+                question=question.question,
+                retrieved_sources=retrieved_sources,
+                answer=answer,
+            ))
 
         output = StudentSearchResultsAndAnswer(search_results=answers, k=k)
         _write_json_model(output, output_path)
@@ -360,17 +379,19 @@ class RAGSystem():
             index_path: Directory containing the BM25 index.
             chunks_path: File containing chunk metadata.
         """
-        _validate_query(query)
+        query = _validate_query(query)
         _validate_k(k)
+        output_path = _resolve_output_path(
+            output_path, save_directory, "query.json"
+        )
+        _prepare_output_path(output_path)
         chunks, index = _load_index_and_chunks(index_path, chunks_path)
         results = retriever.search(query, index, chunks, k=k)
         output = StudentSearchResults(search_results=[MinimalSearchResults(
             question_id=str(uuid.uuid4()), question=query,
             retrieved_sources=results,
         )], k=k)
-        _write_json_model(output, _resolve_output_path(
-            output_path, save_directory, "query.json"
-        ))
+        _write_json_model(output, output_path)
         print(output.model_dump_json(indent=2))
 
     def answer(
@@ -394,8 +415,12 @@ class RAGSystem():
             index_path: Directory containing the BM25 index.
             chunks_path: File containing chunk metadata.
         """
-        _validate_query(query)
+        query = _validate_query(query)
         _validate_k(k)
+        output_path = _resolve_output_path(
+            output_path, save_directory, "query.json"
+        )
+        _prepare_output_path(output_path)
         chunks, index = _load_index_and_chunks(index_path, chunks_path)
         results = retriever.search(query, index, chunks, k=k)
         search_results = StudentSearchResults(search_results=[
@@ -412,9 +437,7 @@ class RAGSystem():
             answer=response,
         )
         output = StudentSearchResultsAndAnswer(search_results=[answer], k=k)
-        _write_json_model(output, _resolve_output_path(
-            output_path, save_directory, "query.json"
-        ))
+        _write_json_model(output, output_path)
         print(output.model_dump_json(indent=2))
 
     def evaluate(
@@ -442,7 +465,7 @@ class RAGSystem():
             _die("student_search_results_path and dataset_path are required")
         try:
             metrics = evaluate_files(
-                student_results_path=results_path,
+                student_search_results_path=results_path,
                 dataset_path=dataset_path,
                 k=k,
                 max_context_length=max_context_length,

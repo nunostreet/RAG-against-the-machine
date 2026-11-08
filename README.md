@@ -61,8 +61,7 @@ data/
 ```
 
 The public datasets are included in this repository. Each of the four files
-above contains 100 questions. Files whose names end in ` 2.json` are duplicate
-copies and are not used by the commands in this README.
+above contains 100 questions. Duplicate copies have been removed.
 
 Use the supplied corpus rather than a checkout of the latest vLLM version.
 Evaluation compares paths exactly, and its reference offsets refer to that
@@ -166,7 +165,11 @@ uv run python -m src answer_dataset \
 `answer_dataset` inherits `k` from the search file. Use `--k 5`, for example,
 to use only its first five sources. It does not retrieve additional sources
 when answering an existing search file. Dataset generation is much slower than
-retrieval on CPU; the guide starts with a small sample before a full run.
+retrieval on CPU; start with a few questions before attempting a full run.
+
+Empty questions in a dataset are kept with no retrieved sources and an empty
+answer. Single-query commands reject empty input. Arguments such as `123` that
+Fire interprets as Python literals are converted back to query text.
 
 ### Choosing other paths
 
@@ -225,7 +228,8 @@ functions, and classes. The chunker chooses a definition boundary within the
 size limit when possible. A large definition is split at the character limit;
 methods inside a class are not treated as separate AST boundaries. These
 chunks cover the file without overlap. Invalid Python falls back to text
-chunking.
+chunking. Files that cannot be read are skipped with a warning so the remaining
+corpus can still be indexed.
 
 For **Markdown and text**, fixed character windows overlap by 200 characters,
 or one fifth of the chunk size when that is smaller. This helps preserve
@@ -236,8 +240,11 @@ Markdown headings or paragraphs.
 
 BM25 ranks chunks using query term matches, term rarity, and document-length
 normalization. Corpus and questions use `bm25s.tokenize()` with its defaults.
-Only chunk text is indexed; file paths are returned as metadata. There is no
-embedding model, reranker, or semantic query expansion.
+Each indexed entry contains the chunk text followed by words from its file
+path. The common `data/raw/<repo>/` prefix is removed and path separators,
+underscores, hyphens, and dots become word boundaries. This helps questions
+that name modules, while source offsets still refer only to the original text.
+There is no embedding model, reranker, or semantic query expansion.
 
 BM25 gives a small, fast baseline that is easy to inspect on CPU. Its weakness
 is vocabulary mismatch: a question can describe a concept without using the
@@ -265,24 +272,24 @@ claim-by-claim citations.
 
 ## Performance analysis
 
-Local measurements on **7 November 2026**, on macOS ARM64 with Python 3.10,
+Local measurements on **8 November 2026**, on macOS ARM64 with Python 3.10,
 used the complete public datasets: 100 docs questions and 100 code questions.
 The saved index was rebuilt with the current chunker at 2000 characters.
 
 | Dataset | Recall@1 | Recall@3 | Recall@5 | Recall@10 | Required recall@5 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Docs | 59% | 79% | **85%** | 90% | 80% |
-| Code | 34% | 48% | **57%** | 65% | 50% |
+| Docs | 61% | 78% | **85%** | 90% | 80% |
+| Code | 43% | 59% | **67%** | 72% | 50% |
 
-Indexing produced **12,819 chunks from 1,856 files** in **6.90 seconds**. Search
-over the 200 questions took **4.74 seconds** across two CLI invocations. These
+Indexing produced **12,819 chunks from 1,856 files** in **6.88 seconds**. Search
+over the 200 questions took **5.24 seconds** across two CLI invocations. These
 wall times include process startup and, for search, loading the saved index.
 The requirements are at most 5 minutes for indexing and 90 seconds for 200
 searches. Generation time is not included in these retrieval measurements.
 
-An earlier local comparison with the same current chunker and all 100 questions
-per dataset gave recall@5 of 84% for docs and 55% for code with 1000-character
-chunks. The 2000-character default gave 85% and 57%, so it is the baseline used
+A local comparison with the same indexing method and all 100 questions per
+dataset gave recall@5 of 81% for docs and 64% for code with 1000-character
+chunks. The 2000-character default gave 85% and 67%, so it is the baseline used
 here. This comparison does not establish the best possible chunk size.
 
 These are **local evaluator results**, not official Linux moulinette results.
@@ -318,7 +325,7 @@ make lint-strict
 make test
 ```
 
-There are currently **44 tests**, covering chunking, evaluation, prompt budgets,
+There are currently **51 tests**, covering chunking, evaluation, prompt budgets,
 and the CLI, including a small persisted search pipeline. Most generation tests
 use test doubles, so passing them does not replace trying the real model.
 

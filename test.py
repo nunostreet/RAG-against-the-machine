@@ -8,11 +8,13 @@ import pytest
 import torch
 from transformers import BatchEncoding
 
-from src.chunker import chunk_file, chunk_text
+from src.chunker import build_chunks, chunk_file, chunk_text
 from src.__main__ import main
 from src.cli import RAGSystem
 from src.evaluator import evaluate_files, evaluate_results, source_iou
 from src.generator import generate
+from src.indexer import build_corpus, build_index
+from src.retriever import search
 from src.models import (
     AnsweredQuestion,
     MinimalSearchResults,
@@ -571,4 +573,115 @@ def test_cli_empty_answer_dataset_does_not_load_model(
     )
     assert output.k == 5
     assert output.search_results == []
+    loader.assert_not_called()
+
+
+def test_path_words_help_retrieval_without_changing_source_offsets(
+    tmp_path: Path,
+) -> None:
+    sources = []
+    for name in ("unrelated.py", "kv_cache.py"):
+        path = tmp_path / name
+        path.write_text("shared implementation text", encoding="utf-8")
+        sources.append(MinimalSource(
+            file_path=str(path), first_character_index=0,
+            last_character_index=len("shared implementation text"),
+        ))
+    corpus = build_corpus(sources)
+    index = build_index(corpus, str(tmp_path / "index"))
+    assert "kv cache py" in corpus[1]
+    assert search("kv cache", index, sources, k=1) == [sources[1]]
+    assert sources[1].last_character_index == len("shared implementation text")
+
+
+def test_chunking_skips_unreadable_files_and_keeps_readable_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bad = tmp_path / "bad.py"
+    good = tmp_path / "good.md"
+    bad.write_text("pass")
+    good.write_text("readable text")
+
+    def read(path: str, size: int) -> list[MinimalSource]:
+        if Path(path) == bad:
+            raise PermissionError("unreadable")
+        return chunk_file(path, size)
+
+    monkeypatch.setattr("src.chunker.chunk_file", read)
+    chunks = build_chunks(str(tmp_path))
+    assert len(chunks) == 1
+    assert Path(chunks[0].file_path).resolve() == good.resolve()
+    assert "skipped" in capsys.readouterr().err
+
+
+def test_chunking_falls_back_when_ast_rejects_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "example.py"
+    text = "x = 1\n" * 20
+    path.write_text(text)
+    monkeypatch.setattr("src.chunker.ast.parse", MagicMock(
+        side_effect=ValueError("invalid source"),
+    ))
+    assert chunk_file(str(path), 30) == chunk_text(str(path), text, 30)
+
+
+@pytest.mark.parametrize("query", ["123", "True"])
+def test_cli_normalizes_fire_literals_to_query_text(
+    query: str, cli_paths: dict[str, str], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    capsys.readouterr()
+    _invoke_cli(monkeypatch, "search", query, "--output_path",
+                str(tmp_path / "literal.json"), *_path_flags(cli_paths))
+    output = StudentSearchResults.model_validate_json(capsys.readouterr().out)
+    assert output.search_results[0].question == query
+
+
+def test_cli_preserves_empty_questions_in_dataset_pipeline(
+    cli_paths: dict[str, str], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "questions.json"
+    path.write_text(RagDataset(rag_questions=[
+        UnansweredQuestion(question_id="empty", question="  "),
+        UnansweredQuestion(question_id="valid", question="LoRA"),
+    ]).model_dump_json())
+    search_path = tmp_path / "search.json"
+    _invoke_cli(monkeypatch, "search_dataset", "--dataset_path", str(path),
+                "--output_path", str(search_path), *_path_flags(cli_paths))
+    results = StudentSearchResults.model_validate_json(search_path.read_text())
+    assert results.search_results[0].question_id == "empty"
+    assert results.search_results[0].retrieved_sources == []
+    assert results.search_results[1].retrieved_sources
+    loader = MagicMock(return_value=(object(), object()))
+    generator = MagicMock(return_value="LoRA answer")
+    monkeypatch.setattr("src.cli.load_model", loader)
+    monkeypatch.setattr("src.cli.generate", generator)
+    answer_path = tmp_path / "answers.json"
+    _invoke_cli(monkeypatch, "answer_dataset",
+                "--student_search_results_path", str(search_path),
+                "--output_path", str(answer_path))
+    answers = StudentSearchResultsAndAnswer.model_validate_json(
+        answer_path.read_text()
+    )
+    assert answers.search_results[0].answer == ""
+    assert answers.search_results[1].answer == "LoRA answer"
+    generator.assert_called_once()
+    loader.assert_called_once()
+
+
+def test_cli_rejects_bad_output_directory_before_loading_model(
+    cli_paths: dict[str, str], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    loader = MagicMock()
+    monkeypatch.setattr("src.cli.load_model", loader)
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as exc:
+        _invoke_cli(monkeypatch, "answer", "LoRA", "--output_path",
+                    str(tmp_path), *_path_flags(cli_paths))
+    assert exc.value.code == 1
+    assert "output path is a directory" in capsys.readouterr().err
     loader.assert_not_called()

@@ -119,12 +119,14 @@ def evaluate_results(
     contribute zero recall. Unanswered questions are ignored. Overlong sources
     invalidate the output, including sources outside the top-k being scored.
     """
-    if k <= 0:
-        raise ValueError("k must be positive")
-    if not 0 < threshold <= 1:
-        raise ValueError("threshold must be in the interval (0, 1]")
-    if max_context_length is not None and max_context_length <= 0:
-        raise ValueError("max_context_length must be positive or None")
+    if type(k) is not int or k <= 0:
+        raise ValueError("k must be a positive integer")
+    if (not isinstance(threshold, (int, float)) or isinstance(threshold, bool)
+            or not 0 < threshold <= 1):
+        raise ValueError("threshold must be a number in the interval (0, 1]")
+    if max_context_length is not None and (
+            type(max_context_length) is not int or max_context_length <= 0):
+        raise ValueError("max_context_length must be a positive integer")
 
     for search_result in student_results.search_results:
         for source in search_result.retrieved_sources:
@@ -182,7 +184,7 @@ def evaluate_results(
 
 
 def evaluate_files(
-    student_results_path: str,
+    student_search_results_path: str,
     dataset_path: str,
     k: int,
     max_context_length: int | None = 2000,
@@ -194,7 +196,7 @@ def evaluate_files(
     user-facing `ValueError` handled by the CLI.
     """
     try:
-        student_results = load_student_results(student_results_path)
+        student_results = load_student_results(student_search_results_path)
         dataset = load_dataset(dataset_path)
     except (
         OSError, UnicodeError, json.JSONDecodeError, ValidationError

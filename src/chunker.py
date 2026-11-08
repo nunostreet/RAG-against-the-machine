@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ast
 import os
+import sys
+from pathlib import Path
 
 from tqdm import tqdm
 
@@ -19,23 +21,49 @@ OVERLAP = 200
 INDEXED_EXTENSIONS = {".py", ".md", ".txt"}
 
 
+def _relative_posix_path(file_path: str) -> str:
+    """Return the path relative to the project root with forward slashes.
+
+    file_path must match the corpus path exactly, so "as_posix" is used.
+
+    Args:
+        file_path: Path to a file inside the corpus.
+
+    Returns:
+        The relative path using `/` as separator.
+    """
+    return Path(os.path.relpath(file_path, start=".")).as_posix()
+
+
 def chunk_python(
     file_path: str,
     text: str,
     chunk_size: int,
 ) -> list[MinimalSource]:
-    """Split Python at top-level definitions, bounding each character span.
+    """Split Python source into chunks that keep definitions whole.
 
-    Definitions larger than chunk_size are split at the character limit.
-    Invalid Python falls back to overlapping text chunks.
+    The file is cut only at the start of top-level `def`, `async def` and
+    `class` statements, and each chunk packs as many whole definitions as
+    fit in `chunk_size`. A definition longer than `chunk_size` is cut at the
+    limit. Chunks do not overlap. Files that do not parse as Python fall back
+    to `chunk_text`.
+
+    Args:
+        file_path: Path of the source file, used for the chunk metadata.
+        text: Full content of the file.
+        chunk_size: Maximum number of characters per chunk.
+
+    Returns:
+        The chunks as character ranges of `text`, in file order.
     """
     try:
         tree = ast.parse(text)
-    except SyntaxError:
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
         return chunk_text(file_path, text, chunk_size)
 
-    lines = text.splitlines(keepends=True)
+    lines = text.splitlines(keepends=True)  # to keep line breaks included
     line_starts = [0]
+    # MinimalSource needs character positions
     for line in lines:
         line_starts.append(line_starts[-1] + len(line))
 
@@ -55,7 +83,7 @@ def chunk_python(
     boundaries.append(len(text))
     boundaries = sorted(set(boundaries))
 
-    relative_path = os.path.relpath(file_path, start=".")
+    relative_path = _relative_posix_path(file_path)
 
     start = 0
     chunks: list[MinimalSource] = []
@@ -64,9 +92,8 @@ def chunk_python(
         maximum_end = min(start + chunk_size, len(text))
 
         possible_ends = [
-            boundary
-            for boundary in boundaries
-            if start < boundary <= maximum_end
+            b for b in boundaries
+            if start < b <= maximum_end
         ]
 
         end = max(possible_ends, default=maximum_end)
@@ -89,8 +116,21 @@ def chunk_text(
     text: str,
     chunk_size: int,
 ) -> list[MinimalSource]:
-    """Split text into character windows with a bounded overlap."""
-    relative_path = os.path.relpath(file_path, start=".")
+    """Split text into fixed-size windows that overlap.
+
+    Consecutive chunks share `OVERLAP` characters, so a sentence cut at one
+    boundary is still whole in the next chunk. The overlap is capped at a
+    fifth of `chunk_size` so the window always moves forward.
+
+    Args:
+        file_path: Path of the source file, used for the chunk metadata.
+        text: Full content of the file.
+        chunk_size: Maximum number of characters per chunk.
+
+    Returns:
+        The chunks as character ranges of `text`, in file order.
+    """
+    relative_path = _relative_posix_path(file_path)
 
     # To avoid negative / very small overlaps
     overlap = min(OVERLAP, max(0, chunk_size // 5))
@@ -117,12 +157,17 @@ def chunk_text(
 def chunk_file(
     file_path: str, chunk_size: int = CHUNK_SIZE
 ) -> list[MinimalSource]:
-    """Split a single file into overlapping chunks of chunk_size characters.
+    """Read a file and chunk it with the strategy for its extension.
 
-    Each chunk is a MinimalSource pointing to a slice of the file via
-    character offsets. Overlap ensures no information is cut off at boundaries.
-    The overlap is capped for very small chunk sizes so the loop always makes
-    progress.
+    Args:
+        file_path: Path of the file to chunk.
+        chunk_size: Maximum number of characters per chunk.
+
+    Returns:
+        The chunks of the file, in file order.
+
+    Raises:
+        ValueError: If `chunk_size` is not positive.
     """
 
     if chunk_size <= 0:
@@ -144,19 +189,32 @@ def build_chunks(
 ) -> list[MinimalSource]:
     """Walk raw_dir recursively and chunk every file with an indexed extension.
 
-    Directory and file names are sorted to make the corpus order deterministic.
-    This matters because bm25s returns corpus positions, which are mapped back
-    to chunks by list index.
+    `os.walk` returns entries in file system order, which differs between
+    machines. Directory and file names are sorted so every run produces the
+    same chunk list, and BM25 ties between chunks break the same way on
+    every machine. Files that cannot be read are skipped with a warning on
+    stderr.
+
+    Args:
+        raw_dir: Root directory of the corpus.
+        max_chunk_size: Maximum number of characters per chunk.
+
+    Returns:
+        The chunks of every indexed file, in walk order.
     """
     all_chunks: list[MinimalSource] = []
     files: list[str] = []
     for dirpath, dirnames, filenames in os.walk(raw_dir):
+        # In place: os.walk reads this list to choose the next directories
         dirnames.sort()
         for fname in sorted(filenames):
             if os.path.splitext(fname)[1].lower() in INDEXED_EXTENSIONS:
                 files.append(os.path.join(dirpath, fname))
 
-    for file_path in tqdm(files, desc="Chunking"):
-        all_chunks.extend(chunk_file(file_path, max_chunk_size))
+    for path in tqdm(files, desc="Chunking"):
+        try:
+            all_chunks.extend(chunk_file(path, max_chunk_size))
+        except OSError as exc:
+            print(f"Warning: skipped {path}: {exc}", file=sys.stderr)
 
     return all_chunks
