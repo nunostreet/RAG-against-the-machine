@@ -358,7 +358,4 @@ and review a sample of generated answers against their source passages.
 AI assistance was used to compare the project with the subject, identify and
 fix CLI and evaluation issues, correct model-input handling and typing in the
 generator, add regression tests, restore the supplied datasets, run local
-benchmarks, and draft documentation. This involved `src/cli.py`,
-`src/__main__.py`, `src/evaluator.py`, `src/generator.py`, supporting chunk/index
-validation and configuration, `test.py`, and the project documentation. The
-student remains responsible for understanding the code and checking its results.
+benchmarks, and draft documentation.
